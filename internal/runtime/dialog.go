@@ -144,8 +144,8 @@ func newStartupDialogConfig(opts []StartupDialogOption) startupDialogConfig {
 //  2. Codex update dialog ("Update available") — requires Down+Enter to skip
 //  3. Workspace trust dialog (Claude "Quick safety check", older Codex
 //     "Do you trust the contents of this directory?", Codex 0.156
-//     "Trust this folder?", Gemini "Do you trust the files in this folder?",
-//     pi "Trust project folder?")
+//     "Trust this folder?", Gemini and Copilot "Do you trust the files in
+//     this folder?", pi "Trust project folder?")
 //  4. External CLAUDE.md imports dialog (Claude "Allow external CLAUDE.md file imports?") — requires Enter to allow (option 1 pre-selected)
 //  5. MCP trust dialog (Claude "New MCP server found in this project") — requires Down+Enter to trust all project MCP servers
 //  6. Codex hook review dialog — requires Down+Enter to trust hooks
@@ -783,9 +783,9 @@ var errStartupDialogStreamInconclusive = errors.New("startup dialog needs a sele
 // acceptWorkspaceTrustDialog dismisses workspace trust dialogs for supported
 // agents. Claude shows "Quick safety check"; older Codex shows
 // "Do you trust the contents of this directory?"; Codex 0.156 shows
-// "Trust this folder?"; Gemini shows "Do you trust the files in this folder?";
-// pi (>= 0.79) shows "Trust project folder?". The safe option isn't reliably
-// pre-selected — a stale Claude Code build can default the cursor to
+// "Trust this folder?"; Gemini and GitHub Copilot CLI show "Do you trust the
+// files in this folder?"; pi (>= 0.79) shows "Trust project folder?". The
+// safe option isn't reliably pre-selected — a stale Claude Code build can default the cursor to
 // "No, exit" — so the handler locates the cursor and the trust option in the
 // rendered content and moves the selection before confirming; it never
 // blind-sends a fixed key sequence. When it can't locate both rows it sends no
@@ -942,6 +942,20 @@ var geminiTrustDialogLayout = trustDialogLayout{
 	},
 }
 
+// copilotTrustDialogLayout is the GitHub Copilot CLI (1.0.x) folder-trust
+// modal: the same question as Gemini, drawn in a bordered box with a "❯"
+// cursor over "1. Yes", "2. Yes, and remember this folder for future
+// sessions", and "3. No (Esc)". The trust row is "1. Yes", which trusts the
+// folder for this session only, so answering it leaves no saved trust behind.
+// The box's right border rides on every row, so it is trimmed from the label.
+var copilotTrustDialogLayout = trustDialogLayout{
+	markers: []string{"❯"},
+	isTrustRow: func(label string) bool {
+		label = strings.TrimSpace(strings.TrimRight(label, "│┃ \t"))
+		return strings.EqualFold(label, "1. Yes")
+	},
+}
+
 var piTrustDialogLayout = trustDialogLayout{
 	markers: []string{"→"},
 	isTrustRow: func(label string) bool {
@@ -952,12 +966,15 @@ var piTrustDialogLayout = trustDialogLayout{
 // workspaceTrustConfirmKeys locates the cursor row and the safe trust
 // option in a rendered workspace-trust dialog and returns the keys that
 // move the selection onto that option and confirm it. Claude, Codex 0.156,
-// Gemini, and pi each render the confirmation as a cursor-navigable list, but
-// with their own marker glyph and label wording (Claude: "❯"/"trust this
-// folder"; Codex 0.156: "›"/"Trust and continue"; Gemini:
-// "●"/"trust folder"; pi: "→"/"Trust"), so which layout to scan with is
-// chosen by which question text matched. Codex 0.156's question is chosen
-// only when it is the last trust question in the capture
+// Gemini, Copilot, and pi each render the confirmation as a cursor-navigable
+// list, but with their own marker glyph and label wording (Claude: "❯"/"trust
+// this folder"; Codex 0.156: "›"/"Trust and continue"; Gemini:
+// "●"/"trust folder"; Copilot: "❯"/"1. Yes"; pi: "→"/"Trust"), so which
+// layout to scan with is chosen by which question text matched. Gemini and
+// Copilot ask the same question, so that question is scanned with Gemini's
+// layout first and Copilot's second; neither layout finds both rows in the
+// other's dialog. Codex 0.156's question is chosen only when it is the last
+// trust question in the capture
 // (codexTrustQuestionIsLast), so a stale copy in scrollback cannot pre-empt
 // another agent's live dialog. Older Codex's trust prompt has no rendered
 // option list at all, so it is answered unconditionally — there is no wrong
@@ -983,7 +1000,10 @@ func workspaceTrustConfirmKeys(content string) ([]string, bool) {
 		}
 		return deriveTrustDialogKeys(content, question, claudeTrustDialogLayout)
 	case strings.Contains(content, "Do you trust the files in this folder?"):
-		return deriveTrustDialogKeys(content, "Do you trust the files in this folder?", geminiTrustDialogLayout)
+		if keys, ok := deriveTrustDialogKeys(content, "Do you trust the files in this folder?", geminiTrustDialogLayout); ok {
+			return keys, true
+		}
+		return deriveTrustDialogKeys(content, "Do you trust the files in this folder?", copilotTrustDialogLayout)
 	case strings.Contains(content, "Trust project folder?"):
 		return deriveTrustDialogKeys(content, "Trust project folder?", piTrustDialogLayout)
 	case strings.Contains(content, "Do you trust the contents of this directory?"):

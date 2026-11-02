@@ -309,3 +309,81 @@ func TestWorkspaceTrustConfirmKeysUpwardMovement(t *testing.T) {
 		t.Errorf("workspaceTrustConfirmKeys() = %v, want %v", keys, want)
 	}
 }
+
+// copilotTrustDialog is the GitHub Copilot CLI 1.0.105 folder-trust modal,
+// captured from a real 90-column pane (only the folder path is changed). It
+// asks the same question as Gemini ("Do you trust the files in this
+// folder?") but renders it in a bordered box with a "❯" cursor and numbered
+// "Yes" / "No" rows, so Gemini's layout finds neither row and sends nothing.
+const copilotTrustDialog = `╭────────────────────────────────────────────────────────────────────────────────────────╮
+│ Confirm folder trust                                                                   │
+│ ────────────────────────────────────────────────────────────────────────────────────── │
+│ ╭────────────────────────────────────────────────────────────────────────────────────╮ │
+│ │ /Users/u/src/project                                                               │ │
+│ ╰────────────────────────────────────────────────────────────────────────────────────╯ │
+│                                                                                        │
+│ Copilot can read files in this folder and, with your permission, edit them or run code │
+│  and shell commands. It will remember your permissions for the rest of this session.   │
+│                                                                                        │
+│ Do you trust the files in this folder?                                                 │
+│                                                                                        │
+│ ❯ 1. Yes                                                                               │
+│   2. Yes, and remember this folder for future sessions                                 │
+│   3. No (Esc)                                                                          │
+│                                                                                        │
+│ ↑/↓ to navigate · enter to select · esc to cancel                                      │
+╰────────────────────────────────────────────────────────────────────────────────────────╯`
+
+// copilotTrustDialogNoSelected is copilotTrustDialog with the cursor on
+// "3. No (Esc)".
+var copilotTrustDialogNoSelected = strings.NewReplacer(
+	"│ ❯ 1. Yes  ", "│   1. Yes  ",
+	"│   3. No (Esc)  ", "│ ❯ 3. No (Esc)  ",
+).Replace(copilotTrustDialog)
+
+func TestWorkspaceTrustConfirmKeysCopilotYesPreSelected(t *testing.T) {
+	if !containsWorkspaceTrustDialog(copilotTrustDialog) {
+		t.Fatal("Copilot trust dialog was not recognized")
+	}
+	keys, ok := workspaceTrustConfirmKeys(copilotTrustDialog)
+	if !ok {
+		t.Fatal("workspaceTrustConfirmKeys() ok = false, want true")
+	}
+	if want := []string{"Enter"}; !reflect.DeepEqual(keys, want) {
+		t.Fatalf("workspaceTrustConfirmKeys() = %v, want %v", keys, want)
+	}
+}
+
+func TestWorkspaceTrustConfirmKeysCopilotNoSelected(t *testing.T) {
+	if copilotTrustDialogNoSelected == copilotTrustDialog {
+		t.Fatal("precondition: fixture replacement did not move the cursor")
+	}
+	keys, ok := workspaceTrustConfirmKeys(copilotTrustDialogNoSelected)
+	if !ok {
+		t.Fatal("workspaceTrustConfirmKeys() ok = false, want true")
+	}
+	if want := []string{"Up", "Up", "Enter"}; !reflect.DeepEqual(keys, want) {
+		t.Fatalf("workspaceTrustConfirmKeys() = %v, want %v", keys, want)
+	}
+}
+
+// TestAcceptWorkspaceTrustDialogConfirmsCopilot drives the closed loop the
+// startup path runs. Before the fix it sent no keys, so the dialog stayed up,
+// its "❯ 1. Yes" row passed the ready-prompt check, and the startup prompt's
+// Enter answered the dialog instead of submitting the prompt.
+func TestAcceptWorkspaceTrustDialogConfirmsCopilot(t *testing.T) {
+	withZeroDialogTimings(t)
+	var sent []string
+	err := acceptWorkspaceTrustDialog(
+		context.Background(),
+		newStartupDialogBudget(time.Second),
+		func(int) (string, error) { return copilotTrustDialog, nil },
+		func(keys ...string) error { sent = append(sent, keys...); return nil },
+	)
+	if err != nil {
+		t.Fatalf("acceptWorkspaceTrustDialog() error = %v", err)
+	}
+	if want := []string{"Enter"}; !reflect.DeepEqual(sent, want) {
+		t.Fatalf("acceptWorkspaceTrustDialog() sent = %v, want %v", sent, want)
+	}
+}
